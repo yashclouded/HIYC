@@ -3,7 +3,8 @@ use std::fs;
 use rfd::FileDialog;  
 #[cfg(target_os = "linux")]
 use std::path::Path;   
-use std::process::Command; 
+use std::process::Command;
+use chrono; 
 
 fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
@@ -26,7 +27,10 @@ struct MyApp {
     message: String,      
     message_color: egui::Color32,  
     last_output: Option<String>,   
-    show_password: bool,          
+    show_password: bool,
+    file_size: Option<u64>,
+    file_modified: Option<String>,
+    file_type: Option<String>,
 }
 impl Default for MyApp {
     fn default() -> Self {
@@ -37,6 +41,9 @@ impl Default for MyApp {
             message_color: egui::Color32::RED,
             last_output: None,  
             show_password: false,
+            file_size: None,
+            file_modified: None,
+            file_type: None,
         }
     }
 }
@@ -73,12 +80,33 @@ impl eframe::App for MyApp {
                             if ui.add_sized([100.0, 30.0], egui::Button::new("Browse")).clicked() {
                                 if let Some(path) = FileDialog::new().pick_file() {
                                     self.filename = path.display().to_string();
+                                    self.update_file_info();
                                 }
                             }
                         });
 
-
                         if !self.filename.is_empty() {
+                            ui.add_space(10.0);
+                            ui.separator();
+                            ui.add_space(6.0);
+                            
+                            ui.horizontal(|ui| {
+                                if let Some(file_type) = &self.file_type {
+                                    ui.label(egui::RichText::new(format!("📄 Type: {}", file_type))
+                                        .color(egui::Color32::GRAY));
+                                }
+                                if let Some(size) = self.file_size {
+                                    ui.label(egui::RichText::new(format!(" • Size: {}", format_file_size(size)))
+                                        .color(egui::Color32::GRAY));
+                                }
+                            });
+                            
+                            if let Some(modified) = &self.file_modified {
+                                ui.add_space(4.0);
+                                ui.label(egui::RichText::new(format!("🕒 Modified: {}", modified))
+                                    .color(egui::Color32::GRAY));
+                            }
+                            
                             ui.add_space(6.0);
                             if ui.button("Reveal in Folder").clicked() {
                                 let _ = reveal_in_file_manager(&self.filename);
@@ -238,6 +266,29 @@ impl MyApp {
         self.message = message.to_string();
         self.message_color = egui::Color32::RED;
     }
+    
+    fn update_file_info(&mut self) {
+        if let Ok(metadata) = fs::metadata(&self.filename) {
+            self.file_size = Some(metadata.len());
+            
+            if let Ok(modified) = metadata.modified() {
+                if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
+                    let datetime = chrono::DateTime::from_timestamp(duration.as_secs() as i64, 0);
+                    self.file_modified = datetime.map(|dt| dt.format("%b %d, %Y %H:%M").to_string());
+                }
+            }
+            
+            if let Some(ext) = std::path::Path::new(&self.filename).extension() {
+                self.file_type = Some(ext.to_string_lossy().to_uppercase());
+            } else {
+                self.file_type = Some("Unknown".to_string());
+            }
+        } else {
+            self.file_size = None;
+            self.file_modified = None;
+            self.file_type = None;
+        }
+    }
 }
 
 fn xor_encrypt_decrypt(data: &[u8], password: &str) -> Vec<u8> {
@@ -275,6 +326,23 @@ fn password_strength(pw: &str) -> (&'static str, egui::Color32) {
         } else {
             ("Strength: Medium", egui::Color32::from_rgb(220, 180, 100))
         }
+    }
+}
+
+fn format_file_size(bytes: u64) -> String {
+    const UNITS: &[&str] = &["b", "kb", "mb", "gb", "tb"];
+    let mut size = bytes as f64;
+    let mut unit_idx = 0;
+    
+    while size >= 1024.0 && unit_idx < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_idx += 1;
+    }
+    
+    if unit_idx == 0 {
+        format!("{} {}", bytes, UNITS[unit_idx])
+    } else {
+        format!("{:.2} {}", size, UNITS[unit_idx])
     }
 }
 
